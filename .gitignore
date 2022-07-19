@@ -253,3 +253,8 @@ samconfig-auth.toml
 /samconfig-mtls.toml
 /samconfig-jwt.toml
 auth0-custom-auth-lambda/node_modules/
+
+server.crt.pem
+.python-version
+client.*
+

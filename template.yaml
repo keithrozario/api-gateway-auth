@@ -14,13 +14,13 @@ Parameters:
     Description: Key for trust store file
     Default: truststore.pem
 
-Globals:
-  Function:
-    Timeout: 5
-    MemorySize: 1536
-    Runtime: java8.al2
-    Handler: com.auth.App::handleRequest
-    CodeUri: auth-functions
+# Globals:
+#   Function:
+#     Timeout: 5
+#     MemorySize: 1536
+#     Runtime: java8.al2
+#     Handler: com.auth.App::handleRequest
+#     CodeUri: auth-functions
 
 Resources:
   PrivateCA:
@@ -96,20 +96,46 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
-  TrustedStoreCustomResourceFunction:
+  # TrustedStoreCustomResourceFunction:
+  #   Type: AWS::Serverless::Function
+  #   Properties:
+  #     FunctionName: TrustedStoreCustomResourceFunction
+  #     Handler: com.auth.TrustedStoreCustomResourceHandler::handleRequest
+  #     Timeout: 120
+  #     Policies:
+  #       - S3CrudPolicy:
+  #           BucketName: !Ref TrustStoreBucket
+
+  # TrustedStoreCustomResource:
+  #   Type: Custom::TrustedStore
+  #   Properties:
+  #     ServiceToken: !GetAtt TrustedStoreCustomResourceFunction.Arn
+  #     TrustStoreBucket: !Ref TrustStoreBucket
+  #     TrustStoreKey: !Ref TruststoreKey
+  #     Certs:
+  #       - !GetAtt MtlsCertificate.Certificate
+  #       - !GetAtt PrivateCACertificate.Certificate
+  
+  TrustedStoreCustomResourceFunctionPython:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: TrustedStoreCustomResourceFunction
-      Handler: com.auth.TrustedStoreCustomResourceHandler::handleRequest
-      Timeout: 120
+      FunctionName: TrustedStoreCustomResourceFunctionPython
+      Timeout: 10
+      MemorySize: 256
+      Runtime: python3.9
+      CodeUri: python_functions/
+      Handler: generate_pem.main
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref TrustStoreBucket
+      Layers:
+          - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPython:22
+          - !Sub arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p39-cfnresponse:1
 
-  TrustedStoreCustomResource:
-    Type: Custom::TrustedStore
+  TrustedStoreUploadFunction:
+    Type: Custom::TrustedStoreCreation
     Properties:
-      ServiceToken: !GetAtt TrustedStoreCustomResourceFunction.Arn
+      ServiceToken: !GetAtt TrustedStoreCustomResourceFunctionPython.Arn
       TrustStoreBucket: !Ref TrustStoreBucket
       TrustStoreKey: !Ref TruststoreKey
       Certs:
@@ -126,45 +152,67 @@ Resources:
           HostedZoneId: !Ref HostedZoneId
       ValidationMethod: DNS
 
-  SampleHttpApi:
-    Type: AWS::Serverless::HttpApi
-    DependsOn: TrustedStoreCustomResource
+  # SampleHttpApi:
+  #   Type: AWS::Serverless::HttpApi
+  #   DependsOn: TrustedStoreCustomResource
+  #   Properties:
+  #     CorsConfiguration:
+  #       AllowMethods:
+  #         - GET
+  #     Domain:
+  #       CertificateArn: !Ref CustomDomainCert
+  #       DomainName: !Ref DomainName
+  #       EndpointConfiguration: REGIONAL
+  #       SecurityPolicy: TLS_1_2
+  #       MutualTlsAuthentication:
+  #         TruststoreUri: !GetAtt TrustedStoreCustomResource.TrustStoreUri
+  #         TruststoreVersion: !GetAtt TrustedStoreCustomResource.ObjectVersion
+  #       Route53:
+  #         EvaluateTargetHealth: False
+  #         HostedZoneId: !Ref HostedZoneId
+  #     DisableExecuteApiEndpoint: true
+
+  FrontRestApi:
+    Type: AWS::Serverless::Api
+    DependsOn: TrustedStoreUploadFunction
     Properties:
-      CorsConfiguration:
+      Name: mtlsApi
+      Cors:
         AllowMethods:
           - GET
-        AllowOrigins:
-          - http://localhost:8080
       Domain:
         CertificateArn: !Ref CustomDomainCert
         DomainName: !Ref DomainName
         EndpointConfiguration: REGIONAL
         SecurityPolicy: TLS_1_2
         MutualTlsAuthentication:
-          TruststoreUri: !GetAtt TrustedStoreCustomResource.TrustStoreUri
-          TruststoreVersion: !GetAtt TrustedStoreCustomResource.ObjectVersion
+          TruststoreUri: !GetAtt TrustedStoreUploadFunction.TrustStoreUri
+          TruststoreVersion: !GetAtt TrustedStoreUploadFunction.ObjectVersion
         Route53:
           EvaluateTargetHealth: False
           HostedZoneId: !Ref HostedZoneId
-      # https://github.com/aws/serverless-application-model/issues/1788
-      #DisableExecuteApiEndpoint: true
+      DisableExecuteApiEndpoint: true
+      StageName: demo
 
   # Open route
   LambdaFunction:
     Type: AWS::Serverless::Function
     Properties:
+      FunctionName: httpResponse
+      Timeout: 29
+      MemorySize: 256
+      Runtime: python3.9
+      CodeUri: python_functions/
+      Handler: api_response.main
       Events:
         RootGet:
-          Type: HttpApi
+          Type: Api
           Properties:
             Path: /
             Method: get
-            ApiId: !Ref SampleHttpApi
+            RestApiId: !Ref FrontRestApi
 
 Outputs:
-  ApiEndpoint:
-    Description: "HTTP API endpoint URL"
-    Value: !Sub "https://${SampleHttpApi}.execute-api.${AWS::Region}.amazonaws.com"
   ClientOneCertArn:
     Description: "Arn for client certificate"
     Value: !Ref ClientOneCert

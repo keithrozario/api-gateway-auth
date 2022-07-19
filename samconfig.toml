@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "mtls-apigw"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-ttftnz6um2gg"
+s3_prefix = "mtls-apigw"
+region = "ap-southeast-1"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "HostedZoneId=\"Z03421323DRTNW5BL35FQ\" DomainName=\"api.waf-demo.keithrozario.com\" TruststoreKey=\"truststore.pem\""
+image_repositories = []
