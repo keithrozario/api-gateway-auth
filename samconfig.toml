@@ -7,5 +7,6 @@ s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-ttftnz6um2gg"
 s3_prefix = "mtls-apigw"
 region = "ap-southeast-1"
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "HostedZoneId=\"Z03421323DRTNW5BL35FQ\" DomainName=\"api.waf-demo.keithrozario.com\" TruststoreKey=\"truststore.pem\""
+parameter_overrides = "HostedZoneId=\"Z03421323DRTNW5BL35FQ\" DomainName=\"api.waf-demo.keithrozario.com\" TruststoreKey=\"truststore.pem\" BackendDomainName=\"backend.waf-demo.keithrozario.com\""
 image_repositories = []
+confirm_changeset = false

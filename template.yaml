@@ -13,14 +13,10 @@ Parameters:
     Type: String
     Description: Key for trust store file
     Default: truststore.pem
+  BackendDomainName:
+    Type: String
+    Description: Backend API Domain
 
-# Globals:
-#   Function:
-#     Timeout: 5
-#     MemorySize: 1536
-#     Runtime: java8.al2
-#     Handler: com.auth.App::handleRequest
-#     CodeUri: auth-functions
 
 Resources:
   PrivateCA:
@@ -96,26 +92,6 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
-  # TrustedStoreCustomResourceFunction:
-  #   Type: AWS::Serverless::Function
-  #   Properties:
-  #     FunctionName: TrustedStoreCustomResourceFunction
-  #     Handler: com.auth.TrustedStoreCustomResourceHandler::handleRequest
-  #     Timeout: 120
-  #     Policies:
-  #       - S3CrudPolicy:
-  #           BucketName: !Ref TrustStoreBucket
-
-  # TrustedStoreCustomResource:
-  #   Type: Custom::TrustedStore
-  #   Properties:
-  #     ServiceToken: !GetAtt TrustedStoreCustomResourceFunction.Arn
-  #     TrustStoreBucket: !Ref TrustStoreBucket
-  #     TrustStoreKey: !Ref TruststoreKey
-  #     Certs:
-  #       - !GetAtt MtlsCertificate.Certificate
-  #       - !GetAtt PrivateCACertificate.Certificate
-  
   TrustedStoreCustomResourceFunctionPython:
     Type: AWS::Serverless::Function
     Properties:
@@ -152,25 +128,15 @@ Resources:
           HostedZoneId: !Ref HostedZoneId
       ValidationMethod: DNS
 
-  # SampleHttpApi:
-  #   Type: AWS::Serverless::HttpApi
-  #   DependsOn: TrustedStoreCustomResource
-  #   Properties:
-  #     CorsConfiguration:
-  #       AllowMethods:
-  #         - GET
-  #     Domain:
-  #       CertificateArn: !Ref CustomDomainCert
-  #       DomainName: !Ref DomainName
-  #       EndpointConfiguration: REGIONAL
-  #       SecurityPolicy: TLS_1_2
-  #       MutualTlsAuthentication:
-  #         TruststoreUri: !GetAtt TrustedStoreCustomResource.TrustStoreUri
-  #         TruststoreVersion: !GetAtt TrustedStoreCustomResource.ObjectVersion
-  #       Route53:
-  #         EvaluateTargetHealth: False
-  #         HostedZoneId: !Ref HostedZoneId
-  #     DisableExecuteApiEndpoint: true
+  BackendDomainCert:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      CertificateTransparencyLoggingPreference: ENABLED
+      DomainName: !Ref BackendDomainName
+      DomainValidationOptions:
+        - DomainName: !Ref BackendDomainName
+          HostedZoneId: !Ref HostedZoneId
+      ValidationMethod: DNS
 
   FrontRestApi:
     Type: AWS::Serverless::Api
@@ -181,18 +147,107 @@ Resources:
         AllowMethods:
           - GET
       Domain:
-        CertificateArn: !Ref CustomDomainCert
-        DomainName: !Ref DomainName
+        CertificateArn: !Ref BackendDomainCert
+        DomainName: !Ref BackendDomainName
         EndpointConfiguration: REGIONAL
         SecurityPolicy: TLS_1_2
-        MutualTlsAuthentication:
-          TruststoreUri: !GetAtt TrustedStoreUploadFunction.TrustStoreUri
-          TruststoreVersion: !GetAtt TrustedStoreUploadFunction.ObjectVersion
+        # MutualTlsAuthentication:
+        #   TruststoreUri: !GetAtt TrustedStoreUploadFunction.TrustStoreUri
+        #   TruststoreVersion: !GetAtt TrustedStoreUploadFunction.ObjectVersion
         Route53:
           EvaluateTargetHealth: False
           HostedZoneId: !Ref HostedZoneId
       DisableExecuteApiEndpoint: true
       StageName: demo
+
+  ProxyApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: proxyAPI
+      DisableExecuteApiEndpoint: true
+
+  Resource:
+    Type: 'AWS::ApiGateway::Resource'
+    Properties:
+      ParentId: !GetAtt ProxyApi.RootResourceId
+      RestApiId: !Ref ProxyApi
+      PathPart: '{proxy+}'
+
+  RootMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: ANY
+      ResourceId: !GetAtt ProxyApi.RootResourceId
+      RestApiId: !Ref ProxyApi
+      AuthorizationType: NONE
+      Integration:
+        IntegrationHttpMethod: ANY
+        Type: HTTP_PROXY
+        Uri: !Sub https://${BackendDomainName}/
+        PassthroughBehavior: WHEN_NO_MATCH
+        IntegrationResponses:
+          - StatusCode: 200
+
+  ProxyMethod:
+    Type: 'AWS::ApiGateway::Method'
+    Properties:
+      HttpMethod: ANY
+      ResourceId: !Ref Resource
+      RestApiId: !Ref ProxyApi
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.path.proxy: true
+      Integration:
+        CacheKeyParameters:
+          - 'method.request.path.proxy'
+        RequestParameters:
+          integration.request.path.proxy: 'method.request.path.proxy'
+        IntegrationHttpMethod: ANY
+        Type: HTTP_PROXY
+        Uri: !Sub https://${BackendDomainName}/
+        PassthroughBehavior: WHEN_NO_MATCH
+        IntegrationResponses:
+          - StatusCode: 200
+  
+  ProxyDomain:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      RegionalCertificateArn: !Ref CustomDomainCert
+      DomainName: !Ref DomainName
+      EndpointConfiguration: 
+        Types:
+          - REGIONAL
+      SecurityPolicy: TLS_1_2
+      MutualTlsAuthentication:
+        TruststoreUri: !GetAtt TrustedStoreUploadFunction.TrustStoreUri
+        TruststoreVersion: !GetAtt TrustedStoreUploadFunction.ObjectVersion
+  
+  ProxyBasePath:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties: 
+      DomainName: !Ref ProxyDomain
+      RestApiId: !Ref ProxyApi
+      Stage: demo
+
+  ProxyDeployment:
+    DependsOn:
+      - RootMethod
+      - ProxyMethod
+    Type: 'AWS::ApiGateway::Deployment'
+    Properties:
+      RestApiId: !Ref ProxyApi
+      StageName: demo
+
+  ProxyApiRoute53RecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        - Name: !Sub ${DomainName}. 
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt ProxyDomain.RegionalHostedZoneId
+            DNSName: !GetAtt ProxyDomain.RegionalDomainName
 
   # Open route
   LambdaFunction:
@@ -216,4 +271,7 @@ Outputs:
   ClientOneCertArn:
     Description: "Arn for client certificate"
     Value: !Ref ClientOneCert
+  ProxyCertArn:
+    Description: "Arn for proxy certificate"
+    Value: !Ref CustomDomainCert
 
