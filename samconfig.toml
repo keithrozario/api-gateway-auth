@@ -2,11 +2,11 @@ version = 0.1
 [default]
 [default.deploy]
 [default.deploy.parameters]
-stack_name = "mtls-apigw"
-s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-ttftnz6um2gg"
-s3_prefix = "mtls-apigw"
+stack_name = "mtls-auth"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-17bk49myluxns"
+s3_prefix = "mtls-auth"
 region = "ap-southeast-1"
 capabilities = "CAPABILITY_IAM"
-parameter_overrides = "HostedZoneId=\"Z03421323DRTNW5BL35FQ\" DomainName=\"api.waf-demo.keithrozario.com\" TruststoreKey=\"truststore.pem\" BackendDomainName=\"backend.waf-demo.keithrozario.com\" TruststoreKeyBackend=\"truststorebackend.pem\""
+disable_rollback = true
+parameter_overrides = "HostedZoneId=\"Z03421323DRTNW5BL35FQ\" ProxyDomainName=\"proxy.waf-demo.keithrozario.com\" ProxyTruststore=\"truststoreproxy.pem\" BackendDomainName=\"backend.waf-demo.keithrozario.com\" BackendTrustStore=\"truststorebackend.pem\""
 image_repositories = []
-confirm_changeset = false

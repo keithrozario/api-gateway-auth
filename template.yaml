@@ -6,17 +6,20 @@ Parameters:
   HostedZoneId:
     Type: String
     Description: Hosted zone where record set needs to be created
-  DomainName:
+    Default: Z03421323DRTNW5BL35FQ
+  ProxyDomainName:
     Type: String
-    Description: Custom domain name
-  TruststoreKey:
+    Description: Custom domain name for Proxy
+    Default: proxy.waf-demo.keithrozario.com
+  ProxyTruststore:
     Type: String
     Description: Key for trust store file
-    Default: truststore.pem
+    Default: truststoreproxy.pem
   BackendDomainName:
     Type: String
-    Description: Backend API Domain
-  TruststoreKeyBackend:
+    Description: Custom domain name for Backend
+    Default: backend.waf-demo.keithrozario.com
+  BackendTrustStore:
     Type: String
     Description: Backend TrustStore
     Default: truststorebackend.pem
@@ -85,7 +88,7 @@ Resources:
     Properties:
       CertificateAuthorityArn: !Ref MtlsCA
       CertificateTransparencyLoggingPreference: ENABLED
-      DomainName: !Ref DomainName
+      DomainName: !Ref ProxyDomainName
       Tags:
         - Key: Name
           Value: ClientOneCert
@@ -96,39 +99,40 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
-  TrustedStoreCustomResourceFunctionPython:
+  TrustedStoreProxy:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: TrustedStoreCustomResourceFunctionPython
+      FunctionName: TrustedStoreProxy
       Timeout: 10
       MemorySize: 256
       Runtime: python3.9
+      Description: Generate Trust Store for Proxy API
       CodeUri: python_functions/
-      Handler: generate_pem.main
+      Handler: generate_pem_proxy.main
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref TrustStoreBucket
       Layers:
           - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPython:22
-          - !Sub arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p39-cfnresponse:1
+          - !Sub arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p39-crhelper:1
 
-  TrustedStoreUploadFunction:
-    Type: Custom::TrustedStoreCreation
+  TrustedStoreProxyUpload:
+    Type: Custom::TrustedStoreProxy
     Properties:
-      ServiceToken: !GetAtt TrustedStoreCustomResourceFunctionPython.Arn
+      ServiceToken: !GetAtt TrustedStoreProxy.Arn
       TrustStoreBucket: !Ref TrustStoreBucket
-      TrustStoreKey: !Ref TruststoreKey
+      TrustStoreKey: !Ref ProxyTruststore
       Certs:
         - !GetAtt MtlsCertificate.Certificate
         - !GetAtt PrivateCACertificate.Certificate
 
-  CustomDomainCert:
+  ProxyDomainCert:
     Type: AWS::CertificateManager::Certificate
     Properties:
       CertificateTransparencyLoggingPreference: ENABLED
-      DomainName: !Ref DomainName
+      DomainName: !Ref ProxyDomainName
       DomainValidationOptions:
-        - DomainName: !Ref DomainName
+        - DomainName: !Ref ProxyDomainName
           HostedZoneId: !Ref HostedZoneId
       ValidationMethod: DNS
 
@@ -141,45 +145,6 @@ Resources:
         - DomainName: !Ref BackendDomainName
           HostedZoneId: !Ref HostedZoneId
       ValidationMethod: DNS
-
-  FrontRestApi:
-    Type: AWS::Serverless::Api
-    DependsOn: TrustedStoreUploadFunction
-    Properties:
-      Name: mtlsApi
-      Cors:
-        AllowMethods:
-          - GET
-      Domain:
-        CertificateArn: !Ref BackendDomainCert
-        DomainName: !Ref BackendDomainName
-        EndpointConfiguration: REGIONAL
-        SecurityPolicy: TLS_1_2
-        MutualTlsAuthentication:
-          TruststoreUri: !GetAtt TrustedStoreBackendUploadFunction.TrustStoreUri
-          TruststoreVersion: !GetAtt TrustedStoreBackendUploadFunction.ObjectVersion
-        Route53:
-          EvaluateTargetHealth: False
-          HostedZoneId: !Ref HostedZoneId
-      DisableExecuteApiEndpoint: true
-      StageName: demo
-
-  LambdaFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: httpResponse
-      Timeout: 29
-      MemorySize: 256
-      Runtime: python3.9
-      CodeUri: python_functions/
-      Handler: api_response.main
-      Events:
-        RootGet:
-          Type: Api
-          Properties:
-            Path: /
-            Method: get
-            RestApiId: !Ref FrontRestApi
 
   ProxyApi:
     Type: 'AWS::ApiGateway::RestApi'
@@ -229,26 +194,27 @@ Resources:
         PassthroughBehavior: WHEN_NO_MATCH
         IntegrationResponses:
           - StatusCode: 200
-  
+
   ProxyDomain:
     Type: AWS::ApiGateway::DomainName
     Properties:
-      RegionalCertificateArn: !Ref CustomDomainCert
-      DomainName: !Ref DomainName
+      RegionalCertificateArn: !Ref ProxyDomainCert
+      DomainName: !Ref ProxyDomainName
       EndpointConfiguration: 
         Types:
           - REGIONAL
       SecurityPolicy: TLS_1_2
       MutualTlsAuthentication:
-        TruststoreUri: !GetAtt TrustedStoreUploadFunction.TrustStoreUri
-        TruststoreVersion: !GetAtt TrustedStoreUploadFunction.ObjectVersion
+        TruststoreUri: !GetAtt TrustedStoreProxyUpload.TrustStoreUri
+        TruststoreVersion: !GetAtt TrustedStoreProxyUpload.ObjectVersion
   
   ProxyBasePath:
     Type: AWS::ApiGateway::BasePathMapping
     Properties: 
-      DomainName: !Ref ProxyDomain
+      DomainName: !Ref ProxyDomainName
       RestApiId: !Ref ProxyApi
       Stage: demo
+    DependsOn: ProxyApiRoute53RecordSetGroup
 
   ProxyDeployment:
     DependsOn:
@@ -267,7 +233,7 @@ Resources:
     Properties:
       HostedZoneId: !Ref HostedZoneId
       RecordSets:
-        - Name: !Sub ${DomainName}. 
+        - Name: !Sub ${ProxyDomainName}. 
           Type: A
           AliasTarget:
             HostedZoneId: !GetAtt ProxyDomain.RegionalHostedZoneId
@@ -278,10 +244,11 @@ Resources:
     Properties: 
       Description: proxyAPIClientCert
 
-  TrustedStoreCustomResourceFunctionBackend:
+  TrustedStoreBackend:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: TrustedStoreCustomResourceFunctionnBackend
+      FunctionName: TrustedStoreBackend
+      Description: Generate Trusted Store for Backend
       Timeout: 10
       MemorySize: 256
       Runtime: python3.9
@@ -298,26 +265,64 @@ Resources:
             Resource: !Sub arn:aws:apigateway:${AWS::Region}::/clientcertificates/*
       Layers:
           - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPython:22
-          - !Sub arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p39-cfnresponse:1
+          - !Sub arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p39-crhelper:1
 
   TrustedStoreBackendUploadFunction:
-    Type: Custom::TrustedStoreCustomResourceFunctionBackend
+    Type: Custom::TrustedStoreBackend
     Properties:
-      ServiceToken: !GetAtt  TrustedStoreCustomResourceFunctionBackend.Arn
+      ServiceToken: !GetAtt  TrustedStoreBackend.Arn
       TrustStoreBucket: !Ref TrustStoreBucket
-      TrustStoreKey: !Ref TruststoreKeyBackend
+      TrustStoreKey: !Ref BackendTrustStore
       ClientCertificateId: !GetAtt ProxyApiClientCert.ClientCertificateId
 
+  BackendRestApi:
+    Type: AWS::Serverless::Api
+    DependsOn: TrustedStoreBackendUploadFunction
+    Properties:
+      Name: mtlsApi
+      Cors:
+        AllowMethods:
+          - GET
+      Domain:
+        CertificateArn: !Ref BackendDomainCert
+        DomainName: !Ref BackendDomainName
+        EndpointConfiguration: REGIONAL
+        SecurityPolicy: TLS_1_2
+        MutualTlsAuthentication:
+          TruststoreUri: !GetAtt TrustedStoreBackendUploadFunction.TrustStoreUri
+          TruststoreVersion: !GetAtt TrustedStoreBackendUploadFunction.ObjectVersion
+        Route53:
+          EvaluateTargetHealth: False
+          HostedZoneId: !Ref HostedZoneId
+      DisableExecuteApiEndpoint: true
+      StageName: demo
+
+  BackendLambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: httpResponse
+      Timeout: 29
+      MemorySize: 256
+      Runtime: python3.9
+      CodeUri: python_functions/
+      Handler: api_response.main
+      Events:
+        RootGet:
+          Type: Api
+          Properties:
+            Path: /
+            Method: get
+            RestApiId: !Ref BackendRestApi
 
 
 Outputs:
   ClientOneCertArn:
     Description: "Arn for client certificate"
     Value: !Ref ClientOneCert
-  ProxyCertArn:
-    Description: "Arn for proxy certificate"
-    Value: !Ref CustomDomainCert
-  ProxyCertificateId:
-    Description: "Proxy Certificate ID"
-    Value: !GetAtt ProxyApiClientCert.ClientCertificateId
+  # ProxyCertArn:
+  #   Description: "Arn for proxy certificate"
+  #   Value: !Ref CustomDomainCert
+  # ProxyCertificateId:
+  #   Description: "Proxy Certificate ID"
+  #   Value: !GetAtt ProxyApiClientCert.ClientCertificateId
 
